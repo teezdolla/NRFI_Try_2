@@ -1,12 +1,20 @@
 import pandas as pd
 import numpy as np
 from sklearn.model_selection import TimeSeriesSplit
-from sklearn.metrics import accuracy_score, f1_score, roc_auc_score, log_loss, precision_score, recall_score
+from sklearn.metrics import (
+    accuracy_score,
+    f1_score,
+    roc_auc_score,
+    log_loss,
+    precision_score,
+    recall_score,
+)
 from sklearn.linear_model import LogisticRegression
 from sklearn.preprocessing import StandardScaler
 from sklearn.pipeline import make_pipeline
+from sklearn.calibration import CalibratedClassifierCV
 import xgboost as xgb
-from typing import Tuple
+from typing import Tuple, List
 
 
 def load_data(path: str) -> pd.DataFrame:
@@ -14,33 +22,62 @@ def load_data(path: str) -> pd.DataFrame:
     return pd.read_csv(path)
 
 
-def add_pitcher_form(df: pd.DataFrame, window: int = 5) -> pd.DataFrame:
-    """Add leak-free rolling pitcher stats."""
+def add_pitcher_form(df: pd.DataFrame, window: int = 5, short_window: int = 3) -> pd.DataFrame:
+    """Add leak-free rolling pitcher stats for recent form."""
+    if "game_date" not in df.columns:
+        # Dataset already has aggregated features
+        return df
     df = df.sort_values(["pitcher", "game_date"])
+
     rolling_cols = ["hits_allowed", "walks", "strikeouts", "batters_faced", "runs_allowed"]
     for col in rolling_cols:
         df[f"{col}_rolling{window}"] = (
             df.groupby("pitcher")[col]
-            .shift()  # exclude current game
+            .shift()
             .rolling(window=window, min_periods=1)
             .mean()
         )
+        df[f"{col}_rolling{short_window}"] = (
+            df.groupby("pitcher")[col]
+            .shift()
+            .rolling(window=short_window, min_periods=1)
+            .mean()
+        )
+
     df["K_pct"] = (
         df.groupby("pitcher")
-        .apply(lambda x: (x["strikeouts"].shift() / x["batters_faced"].shift()).rolling(window, min_periods=1).mean())
+        .apply(
+            lambda x: (
+                x["strikeouts"].shift() / x["batters_faced"].shift()
+            ).rolling(window, min_periods=1).mean()
+        )
         .reset_index(level=0, drop=True)
     )
     df["BB_pct"] = (
         df.groupby("pitcher")
-        .apply(lambda x: (x["walks"].shift() / x["batters_faced"].shift()).rolling(window, min_periods=1).mean())
+        .apply(
+            lambda x: (
+                x["walks"].shift() / x["batters_faced"].shift()
+            ).rolling(window, min_periods=1).mean()
+        )
         .reset_index(level=0, drop=True)
     )
+
+    # Rolling xERA to capture recent effectiveness
+    if "xERA_season" in df.columns:
+        df["xERA_rolling"] = (
+            df.groupby("pitcher")["xERA_season"].shift().rolling(window, min_periods=1).mean()
+        )
+
     return df
 
 
-def add_team_offense(df: pd.DataFrame, window: int = 10) -> pd.DataFrame:
+def add_team_offense(df: pd.DataFrame, window: int = 10, short_window: int = 7) -> pd.DataFrame:
     """Add leak-free rolling team offense stats."""
+    if "game_date" not in df.columns or "team" not in df.columns:
+        return df
     df = df.sort_values(["team", "game_date"])
+
     rolling_cols = {
         "runs_1st": "runs_rolling",
         "hits": "hits_rolling",
@@ -50,6 +87,7 @@ def add_team_offense(df: pd.DataFrame, window: int = 10) -> pd.DataFrame:
         "abs": "ab_rolling",
         "strikeouts": "k_rolling",
     }
+
     for col, new in rolling_cols.items():
         df[new] = (
             df.groupby("team")[col]
@@ -57,12 +95,22 @@ def add_team_offense(df: pd.DataFrame, window: int = 10) -> pd.DataFrame:
             .rolling(window=window, min_periods=1)
             .mean()
         )
+        df[f"{new}{short_window}"] = (
+            df.groupby("team")[col]
+            .shift()
+            .rolling(window=short_window, min_periods=1)
+            .mean()
+        )
+
     df["OBP_team"] = (df["hits_rolling"] + df["walks_rolling"]) / df["pa_rolling"]
     df["SLG_team"] = df["tb_rolling"] / df["ab_rolling"]
     df["K_rate_team"] = df["k_rolling"] / df["pa_rolling"]
     df["BB_rate_team"] = df["walks_rolling"] / df["pa_rolling"]
-    df["ISO_team"] = (df["SLG_team"] - df["hits_rolling"] / df["ab_rolling"])
+    df["ISO_team"] = df["SLG_team"] - df["hits_rolling"] / df["ab_rolling"]
     df["OPS_team"] = df["OBP_team"] + df["SLG_team"]
+
+    # Simple wOBA approximation using OBP and SLG
+    df["wOBA_team"] = 0.5 * df["OBP_team"] + 0.5 * df["SLG_team"]
 
     return df
 
@@ -73,25 +121,63 @@ def merge_ballpark_factors(df: pd.DataFrame, park_factors: pd.DataFrame) -> pd.D
 
 def time_series_cv(
     X: pd.DataFrame, y: pd.Series, n_splits: int = 5
-) -> Tuple[float, float, float, float, float]:
-    """Perform time-series cross validation and return averaged metrics."""
+) -> Tuple[List[float], List[float]]:
+    """Perform time-series cross validation for logistic and XGBoost models."""
     tscv = TimeSeriesSplit(n_splits=n_splits)
-    metrics = []
+
+    lr_metrics: List[List[float]] = []
+    xgb_metrics: List[List[float]] = []
 
     for train_index, test_index in tscv.split(X):
         X_train, X_test = X.iloc[train_index], X.iloc[test_index]
         y_train, y_test = y.iloc[train_index], y.iloc[test_index]
 
-        model = make_pipeline(
+        # Logistic regression with isotonic calibration
+        lr_model = make_pipeline(
             StandardScaler(),
-            LogisticRegression(max_iter=1000, class_weight="balanced", random_state=42)
+            LogisticRegression(max_iter=1000, class_weight="balanced", random_state=42),
         )
-        calibrated = CalibratedClassifierCV(model, method="isotonic", cv=3)
+        calibrated = CalibratedClassifierCV(lr_model, method="isotonic", cv=3)
         calibrated.fit(X_train, y_train)
 
-        preds = calibrated.predict(X_test)
-        proba = calibrated.predict_proba(X_test)[:, 1]
-        metrics.append(
+        lr_preds = calibrated.predict(X_test)
+        lr_proba = calibrated.predict_proba(X_test)[:, 1]
+        lr_metrics.append(
+            [
+                accuracy_score(y_test, lr_preds),
+                roc_auc_score(y_test, lr_proba),
+                f1_score(y_test, lr_preds),
+                precision_score(y_test, lr_preds),
+                recall_score(y_test, lr_preds),
+                log_loss(y_test, lr_proba),
+            ]
+        )
+
+        # Tuned XGBoost model
+        dtrain = xgb.DMatrix(X_train, label=y_train)
+        dtest = xgb.DMatrix(X_test, label=y_test)
+        params = {
+            "objective": "binary:logistic",
+            "eval_metric": "logloss",
+            "learning_rate": 0.05,
+            "max_depth": 5,
+            "subsample": 0.8,
+            "colsample_bytree": 0.8,
+            "seed": 42,
+        }
+        cv_res = xgb.cv(
+            params,
+            dtrain,
+            num_boost_round=500,
+            nfold=3,
+            early_stopping_rounds=20,
+            verbose_eval=False,
+        )
+        best_round = len(cv_res)
+        booster = xgb.train(params, dtrain, num_boost_round=best_round)
+        proba = booster.predict(dtest)
+        preds = (proba >= 0.5).astype(int)
+        xgb_metrics.append(
             [
                 accuracy_score(y_test, preds),
                 roc_auc_score(y_test, proba),
@@ -102,12 +188,13 @@ def time_series_cv(
             ]
         )
 
-    metrics = np.array(metrics)
-    return metrics.mean(axis=0)
+    return np.mean(lr_metrics, axis=0).tolist(), np.mean(xgb_metrics, axis=0).tolist()
 
 
 def train_xgboost(X: pd.DataFrame, y: pd.Series) -> xgb.Booster:
+    """Train a tuned XGBoost model using cross-validation."""
     dtrain = xgb.DMatrix(X, label=y)
+
     params = {
         "objective": "binary:logistic",
         "eval_metric": "logloss",
@@ -115,9 +202,19 @@ def train_xgboost(X: pd.DataFrame, y: pd.Series) -> xgb.Booster:
         "max_depth": 5,
         "subsample": 0.8,
         "colsample_bytree": 0.8,
-        "random_state": 42,
+        "seed": 42,
     }
-    model = xgb.train(params, dtrain, num_boost_round=300)
+
+    cv_res = xgb.cv(
+        params,
+        dtrain,
+        num_boost_round=500,
+        nfold=5,
+        early_stopping_rounds=20,
+        verbose_eval=False,
+    )
+    best_round = len(cv_res)
+    model = xgb.train(params, dtrain, num_boost_round=best_round)
     return model
 
 
@@ -159,6 +256,7 @@ def predict_today(model: xgb.Booster, X: pd.DataFrame, threshold: float = 0.5) -
         "P_NRFI": 1 - proba,
         "Prediction": np.where(predictions == 1, "YRFI", "NRFI"),
         "Confidence": np.abs(proba - 0.5) * 2,
+        "Threshold": threshold,
     })
 
 
@@ -173,10 +271,15 @@ def main():
     X = df[feature_cols].fillna(0)
     y = df["label"]
 
-    metrics = time_series_cv(X, y, n_splits=5)
+    lr_metrics, xgb_metrics = time_series_cv(X, y, n_splits=5)
     print(
-        "CV Metrics -> Accuracy: {:.4f}, AUC: {:.4f}, F1: {:.4f}, Precision: {:.4f}, Recall: {:.4f}, LogLoss: {:.4f}".format(
-            *metrics
+        "LogReg CV -> Acc: {:.4f}, AUC: {:.4f}, F1: {:.4f}, Precision: {:.4f}, Recall: {:.4f}, LogLoss: {:.4f}".format(
+            *lr_metrics
+        )
+    )
+    print(
+        "XGB CV -> Acc: {:.4f}, AUC: {:.4f}, F1: {:.4f}, Precision: {:.4f}, Recall: {:.4f}, LogLoss: {:.4f}".format(
+            *xgb_metrics
         )
     )
 
