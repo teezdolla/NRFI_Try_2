@@ -1,0 +1,24 @@
+team	pitcher_name	P_YRFI	P_NRFI
+Colorado Rockies	Kodai Senga	0.419493	0.580507
+New York Yankees	Walker Buehler	0.412303	0.587697
+Detroit Tigers	Ben Brown	0.408580	0.591420
+Cleveland Guardians	Colton Gordon	0.408502	0.591498
+Chicago White Sox	Seth Lugo	0.404967	0.595033
+Pittsburgh Pirates	Joe Ross	0.404967	0.595033
+Texas Rangers	Michael Soroka	0.402462	0.597538
+Washington Nationals	Patrick Corbin	0.398542	0.601458
+Los Angeles Angels	Bryce Miller	0.398286	0.601714
+St. Louis Cardinals	Justin Wrobleski	0.398286	0.601714
+San Francisco Giants	Spencer Schwellenbach	0.398286	0.601714
+Milwaukee Brewers	Randy Vásquez	0.398286	0.601714
+Kansas City Royals	Davis Martin	0.391052	0.608948
+Philadelphia Phillies	Bailey Falter	0.391052	0.608948
+New York Mets	Antonio Senzatela	0.380800	0.619200
+Chicago Cubs	Tarik Skubal	0.378143	0.621857
+Arizona Diamondbacks	Nick Lodolo	0.378143	0.621857
+Houston Astros	Logan Allen	0.378143	0.621857
+Boston Red Sox	Will Warren	0.357738	0.642262
+San Diego Padres	Chad Patrick	0.357738	0.642262
+Atlanta Braves	Hayden Birdsong	0.357738	0.642262
+Los Angeles Dodgers	Sonny Gray	0.342833	0.657167
+Seattle Mariners	Kyle Hendricks	0.342833	0.657167
