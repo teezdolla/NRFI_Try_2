@@ -18,6 +18,23 @@ import xgboost as xgb
 from typing import Tuple, List
 
 
+def combine_half_innings(df: pd.DataFrame) -> pd.DataFrame:
+    """Combine consecutive half-innings into a single row with a total label."""
+    # Ensure even number of rows
+    if len(df) % 2 == 1:
+        df = df.iloc[:-1]
+    top = df.iloc[::2].reset_index(drop=True)
+    bot = df.iloc[1::2].reset_index(drop=True)
+
+    feature_cols = [c for c in df.columns if c not in {"label", "pitcher"}]
+    top_features = top[feature_cols].add_prefix("top_")
+    bot_features = bot[feature_cols].add_prefix("bot_")
+
+    combined = pd.concat([top_features, bot_features], axis=1)
+    combined["label"] = ((top["label"] == 1) | (bot["label"] == 1)).astype(int)
+    return combined
+
+
 def load_data(path: str) -> pd.DataFrame:
     """Load training data."""
     return pd.read_csv(path)
@@ -299,6 +316,27 @@ def main():
 
     model = train_xgboost(X, y)
     model.save_model("xgboost_nrfi_model.json")
+
+    # Train a model on full inning data
+    full_df = combine_half_innings(df)
+    full_feature_cols = [c for c in full_df.columns if c != "label"]
+    X_full = full_df[full_feature_cols].fillna(0)
+    y_full = full_df["label"]
+
+    lr_full, xgb_full = time_series_cv(X_full, y_full, n_splits=5)
+    print(
+        "Full Inning LogReg CV -> Acc: {:.4f}, AUC: {:.4f}, F1: {:.4f}, Precision: {:.4f}, Recall: {:.4f}, LogLoss: {:.4f}".format(
+            *lr_full
+        )
+    )
+    print(
+        "Full Inning XGB CV -> Acc: {:.4f}, AUC: {:.4f}, F1: {:.4f}, Precision: {:.4f}, Recall: {:.4f}, LogLoss: {:.4f}".format(
+            *xgb_full
+        )
+    )
+
+    full_model = train_xgboost(X_full, y_full)
+    full_model.save_model("xgboost_yrfi_full_inning.json")
 
 
 if __name__ == "__main__":

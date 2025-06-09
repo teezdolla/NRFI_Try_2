@@ -247,6 +247,15 @@ def main():
     games['P_YRFI'] = model.predict(dmat)
     games['P_NRFI'] = 1 - games['P_YRFI']
 
+    # Prepare features for the full inning model (top followed by bottom)
+    top_feats = X.iloc[::2].reset_index(drop=True).add_prefix('top_')
+    bot_feats = X.iloc[1::2].reset_index(drop=True).add_prefix('bot_')
+    full_X = pd.concat([top_feats, bot_feats], axis=1)
+
+    full_model = xgb.Booster()
+    full_model.load_model('xgboost_yrfi_full_inning.json')
+    full_probs = full_model.predict(xgb.DMatrix(full_X))
+
     # Pivot to get separate predictions for each half inning
     pivot = games.pivot_table(
         index=["game_id", "away_name", "home_name"],
@@ -257,9 +266,9 @@ def main():
     # Flatten the MultiIndex columns produced by the pivot
     pivot.columns = ["_".join(col).strip("_") for col in pivot.columns.to_flat_index()]
 
-    # Calculate inning totals from the top and bottom probabilities
-    pivot["P_YRFI_total"] = 1 - (1 - pivot.get("P_YRFI_Top", 0)) * (1 - pivot.get("P_YRFI_Bot", 0))
-    pivot["P_NRFI_total"] = 1 - pivot["P_YRFI_total"]
+    # Totals predicted by the full inning model
+    pivot["P_YRFI_total"] = full_probs
+    pivot["P_NRFI_total"] = 1 - full_probs
 
     pivot["matchup"] = pivot["away_name"] + " @ " + pivot["home_name"]
 
