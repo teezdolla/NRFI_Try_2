@@ -1,0 +1,6 @@
+pandas
+MLB-StatsAPI
+pybaseball
+xgboost
+scikit-learn
+numpy

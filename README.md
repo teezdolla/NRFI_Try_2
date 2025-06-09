@@ -2,6 +2,14 @@
 
 This project predicts whether a run will be scored in the first inning (YRFI/NRFI).
 
+## Installation
+
+Install the required Python packages with:
+
+```bash
+pip install -r requirements.txt
+```
+
 ### Features
 - Leak-free rolling averages for pitchers and offense computed with `.shift().rolling()` to avoid data leakage.
 - Pitcher form metrics including `K_pct`, `BB_pct` and rolling xERA.
@@ -16,3 +24,13 @@ Run:
 ```bash
 python nrfi_pipeline.py
 ```
+
+### Daily Predictions
+
+After installing the requirements, run:
+
+```bash
+python predict_today.py
+```
+
+This script outputs NRFI/YRFI probabilities for the **entire** first inning and saves them to `predictions.txt`.
