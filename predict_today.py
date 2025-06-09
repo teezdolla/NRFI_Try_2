@@ -1,8 +1,20 @@
 import pandas as pd
+import numpy as np
+import requests
 import statsapi
-from pybaseball import playerid_lookup
+from pybaseball import playerid_lookup, playerid_reverse_lookup, pitching_stats
 import xgboost as xgb
 from datetime import datetime
+from functools import lru_cache
+
+# Mapping from 2-3 letter abbreviations to MLBAM team ids
+TEAM_ID_MAP = {
+    'ATH': 133, 'PIT': 134, 'SD': 135, 'SEA': 136, 'SF': 137, 'STL': 138,
+    'TB': 139, 'TEX': 140, 'TOR': 141, 'MIN': 142, 'PHI': 143, 'ATL': 144,
+    'CWS': 145, 'MIA': 146, 'NYY': 147, 'MIL': 158, 'LAA': 108, 'AZ': 109,
+    'BAL': 110, 'BOS': 111, 'CHC': 112, 'CIN': 113, 'CLE': 114, 'COL': 115,
+    'DET': 116, 'HOU': 117, 'KC': 118, 'LAD': 119, 'WSH': 120, 'NYM': 121,
+}
 
 
 def get_pitcher_id(name: str) -> int | None:
@@ -19,6 +31,119 @@ def get_pitcher_id(name: str) -> int | None:
     except Exception:
         pass
     return None
+
+
+@lru_cache(maxsize=None)
+def _fg_table(season: int) -> pd.DataFrame:
+    """Cache Fangraphs pitching stats for a season."""
+    return pitching_stats(season, season, qual=0)
+
+
+@lru_cache(maxsize=None)
+def _fg_id(mlbam: int) -> int | None:
+    """Map MLBAM id to Fangraphs id."""
+    try:
+        return int(playerid_reverse_lookup([mlbam]).key_fangraphs.iloc[0])
+    except Exception:
+        return None
+
+
+@lru_cache(maxsize=None)
+def _team_id(name: str) -> int:
+    if name in TEAM_ID_MAP:
+        return TEAM_ID_MAP[name]
+    lookup = statsapi.lookup_team(name)
+    if not lookup:
+        raise ValueError(f"Unknown team {name}")
+    return lookup[0]["id"]
+
+
+def pitcher_form_features(pitcher: int, season: int, n: int = 5) -> dict:
+    """Rolling averages for recent pitcher games."""
+    url = f"https://statsapi.mlb.com/api/v1/people/{pitcher}/stats"
+    params = {"stats": "gameLog", "group": "pitching", "season": season}
+    resp = requests.get(url, params=params, timeout=10)
+    splits = resp.json().get("stats", [{}])[0].get("splits", [])
+    if not splits:
+        return {k: np.nan for k in ["hits_allowed", "walks", "strikeouts", "batters_faced", "runs_allowed"]}
+    df = pd.json_normalize(splits)
+    df["date"] = pd.to_datetime(df["date"])
+    df = df.sort_values("date").tail(n)
+    return {
+        "hits_allowed": df["stat.hits"].mean(),
+        "walks": df["stat.baseOnBalls"].mean(),
+        "strikeouts": df["stat.strikeOuts"].mean(),
+        "batters_faced": df["stat.battersFaced"].mean(),
+        "runs_allowed": df["stat.runs"].mean(),
+    }
+
+
+def pitcher_season_features(pitcher: int, season: int) -> dict:
+    """Season-long pitching stats including Fangraphs metrics."""
+    url = f"https://statsapi.mlb.com/api/v1/people/{pitcher}/stats"
+    params = {"stats": "season", "group": "pitching", "season": season}
+    resp = requests.get(url, params=params, timeout=10)
+    split = resp.json().get("stats", [{}])[0].get("splits", [])
+    stat = split[0]["stat"] if split else {}
+    feats = {
+        "ERA_season": float(stat.get("era", np.nan)),
+        "WHIP_season": float(stat.get("whip", np.nan)),
+        "K/9_season": float(stat.get("strikeoutsPer9Inn", np.nan)),
+        "BB/9_season": float(stat.get("walksPer9Inn", np.nan)),
+    }
+    fgid = _fg_id(pitcher)
+    table = _fg_table(season)
+    if fgid and fgid in table["IDfg"].values:
+        row = table.loc[table["IDfg"] == fgid].iloc[0]
+        feats.update(
+            {
+                "FIP_season": float(row.get("FIP", np.nan)),
+                "xFIP_season": float(row.get("xFIP", np.nan)),
+                "CSW%_season": float(row.get("CSW%", np.nan)),
+                "xERA_season": float(row.get("xERA", np.nan)),
+            }
+        )
+    else:
+        feats.update(
+            {
+                "FIP_season": np.nan,
+                "xFIP_season": np.nan,
+                "CSW%_season": np.nan,
+                "xERA_season": np.nan,
+            }
+        )
+    return feats
+
+
+def team_offense_features(team: str, season: int, date_str: str) -> dict:
+    """Approximate team offense metrics using recent games and season stats."""
+    tid = _team_id(team)
+    schedule = statsapi.schedule(team=tid, end_date=date_str)
+    schedule = [g for g in schedule if g.get("status") == "Final"][-10:]
+    runs = []
+    for g in schedule:
+        gid = g["game_id"]
+        line = requests.get(f"https://statsapi.mlb.com/api/v1/game/{gid}/linescore", timeout=10).json()
+        half = "home" if g["home_id"] == tid else "away"
+        try:
+            runs.append(line["innings"][0][half]["runs"])
+        except Exception:
+            pass
+    run_avg = np.mean(runs) if runs else np.nan
+
+    ts = statsapi.get(
+        "team_stats",
+        {"teamId": tid, "season": season, "stats": "season", "group": "hitting"},
+    )
+    stat = ts["stats"][0]["splits"][0]["stat"]
+    pa = float(stat.get("plateAppearances", 1))
+    return {
+        "runs_rolling10_team": run_avg,
+        "OBP_team": float(stat.get("obp", np.nan)),
+        "SLG_team": float(stat.get("slg", np.nan)),
+        "K_rate_team": float(stat.get("strikeOuts", 0)) / pa,
+        "BB_rate_team": float(stat.get("baseOnBalls", 0)) / pa,
+    }
 
 
 def fetch_games(date_str: str) -> pd.DataFrame:
@@ -77,17 +202,29 @@ def build_features(df: pd.DataFrame, date_str: str):
     df['inning'] = 1
     df['is_home_team'] = (df['inning_topbot'] == 'Bot').astype(int)
 
-    feature_cols = ['inning','pitcher','season','hits_allowed','walks','strikeouts',
-                    'batters_faced','runs_allowed','ERA_season','WHIP_season','FIP_season',
-                    'K/9_season','BB/9_season','xFIP_season','CSW%_season','xERA_season',
-                    'runs_rolling10_team','OBP_team','SLG_team','K_rate_team','BB_rate_team',
-                    'is_home_team']
+    feature_cols = [
+        'inning','pitcher','season','hits_allowed','walks','strikeouts',
+        'batters_faced','runs_allowed','ERA_season','WHIP_season','FIP_season',
+        'K/9_season','BB/9_season','xFIP_season','CSW%_season','xERA_season',
+        'runs_rolling10_team','OBP_team','SLG_team','K_rate_team','BB_rate_team',
+        'is_home_team'
+    ]
 
-    X = pd.DataFrame(0, index=df.index, columns=feature_cols)
-    X['inning'] = df['inning']
-    X['pitcher'] = df['pitcher']
-    X['season'] = df['season']
-    X['is_home_team'] = df['is_home_team']
+    X = pd.DataFrame(index=df.index, columns=feature_cols, dtype=float)
+
+    for idx, row in df.iterrows():
+        p_form = pitcher_form_features(row['pitcher'], row['season'])
+        p_season = pitcher_season_features(row['pitcher'], row['season'])
+        t_off = team_offense_features(row['team_abbr'], row['season'], date_str)
+        feats = {**p_form, **p_season, **t_off}
+
+        X.loc[idx, 'inning'] = row['inning']
+        X.loc[idx, 'pitcher'] = row['pitcher']
+        X.loc[idx, 'season'] = row['season']
+        X.loc[idx, 'is_home_team'] = row['is_home_team']
+        for col, val in feats.items():
+            X.loc[idx, col] = val
+
     return df, X
 
 
