@@ -24,6 +24,9 @@ Run:
 ```bash
 python nrfi_pipeline.py
 ```
+### Dataset Balance
+`final_training_data_clean_final.csv` holds 4,344 labeled half-innings. A label of `1` represents a YRFI (a run scored) while `0` means NRFI. The file contains 2,518 YRFI rows (about 58%) and 1,826 NRFI rows (about 42%).
+
 
 ### Daily Predictions
 
@@ -32,6 +35,8 @@ After installing the requirements, run:
 ```bash
 python predict_today.py
 ```
+
+The script multiplies the predicted probabilities for the top and bottom halves of the first inning, effectively assuming they are independent events. This means `P_YRFI_total` can be higher than either half on its own.
 
 `predict_today.py` fetches the daily games and outputs probabilities for each half
 of the first inning as well as the combined total for the entire inning. The
