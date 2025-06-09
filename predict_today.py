@@ -275,8 +275,17 @@ def main():
         ]
     ].sort_values("P_YRFI_total", ascending=False)
 
-    result.to_csv('predictions.txt', index=False, sep='\t', float_format='%.6f')
-    print(result)
+    # Write results with comma separated values and fixed precision
+    result.to_csv(
+        "predictions.txt",
+        index=False,
+        sep=",",
+        float_format="%.3f",
+    )
+
+    # Display with the same formatting so console output matches the file
+    with pd.option_context("display.float_format", "{:.3f}".format):
+        print(result.to_string(index=False))
 
 if __name__ == '__main__':
     main()
