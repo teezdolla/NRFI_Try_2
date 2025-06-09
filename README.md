@@ -33,4 +33,6 @@ After installing the requirements, run:
 python predict_today.py
 ```
 
-This script outputs NRFI/YRFI probabilities for the **entire** first inning and saves them to `predictions.txt`.
+`predict_today.py` fetches the daily games and outputs probabilities for each half
+of the first inning as well as the combined total for the entire inning. The
+results are written to `predictions.txt`.
