@@ -26,12 +26,33 @@ def fetch_games(date_str: str) -> pd.DataFrame:
     schedule = statsapi.schedule(date=date_str)
     rows = []
     for g in schedule:
-        home_pitcher = g.get('home_probable_pitcher')
-        away_pitcher = g.get('away_probable_pitcher')
+        home_pitcher = g.get("home_probable_pitcher")
+        away_pitcher = g.get("away_probable_pitcher")
         if not home_pitcher or not away_pitcher:
             continue
-        rows.append({'team': g['away_name'], 'pitcher_name': home_pitcher, 'inning_topbot': 'Top'})
-        rows.append({'team': g['home_name'], 'pitcher_name': away_pitcher, 'inning_topbot': 'Bot'})
+        game_id = g.get("game_id")
+        home = g["home_name"]
+        away = g["away_name"]
+        rows.append(
+            {
+                "game_id": game_id,
+                "team": away,
+                "pitcher_name": home_pitcher,
+                "inning_topbot": "Top",
+                "home_name": home,
+                "away_name": away,
+            }
+        )
+        rows.append(
+            {
+                "game_id": game_id,
+                "team": home,
+                "pitcher_name": away_pitcher,
+                "inning_topbot": "Bot",
+                "home_name": home,
+                "away_name": away,
+            }
+        )
     return pd.DataFrame(rows)
 
 
@@ -82,7 +103,18 @@ def main():
     dmat = xgb.DMatrix(X)
     games['P_YRFI'] = model.predict(dmat)
     games['P_NRFI'] = 1 - games['P_YRFI']
-    result = games[['team','pitcher_name','P_YRFI','P_NRFI']].sort_values('P_YRFI', ascending=False)
+
+    pivot = games.pivot_table(
+        index=['game_id', 'away_name', 'home_name'],
+        columns='inning_topbot',
+        values='P_YRFI'
+    )
+    pivot = pivot.reset_index()
+    pivot['P_YRFI'] = 1 - (1 - pivot['Top']) * (1 - pivot['Bot'])
+    pivot['P_NRFI'] = 1 - pivot['P_YRFI']
+    pivot['matchup'] = pivot['away_name'] + ' @ ' + pivot['home_name']
+    result = pivot[['matchup', 'P_YRFI', 'P_NRFI']].sort_values('P_YRFI', ascending=False)
+
     result.to_csv('predictions.txt', index=False, sep='\t', float_format='%.6f')
     print(result)
 
