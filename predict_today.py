@@ -104,16 +104,33 @@ def main():
     games['P_YRFI'] = model.predict(dmat)
     games['P_NRFI'] = 1 - games['P_YRFI']
 
+    # Pivot to get separate predictions for each half inning
     pivot = games.pivot_table(
-        index=['game_id', 'away_name', 'home_name'],
-        columns='inning_topbot',
-        values='P_YRFI'
-    )
-    pivot = pivot.reset_index()
-    pivot['P_YRFI'] = 1 - (1 - pivot['Top']) * (1 - pivot['Bot'])
-    pivot['P_NRFI'] = 1 - pivot['P_YRFI']
-    pivot['matchup'] = pivot['away_name'] + ' @ ' + pivot['home_name']
-    result = pivot[['matchup', 'P_YRFI', 'P_NRFI']].sort_values('P_YRFI', ascending=False)
+        index=["game_id", "away_name", "home_name"],
+        columns="inning_topbot",
+        values=["P_YRFI", "P_NRFI"],
+    ).reset_index()
+
+    # Flatten the MultiIndex columns produced by the pivot
+    pivot.columns = ["_".join(col).strip("_") for col in pivot.columns.to_flat_index()]
+
+    # Calculate inning totals from the top and bottom probabilities
+    pivot["P_YRFI_total"] = 1 - (1 - pivot.get("P_YRFI_Top", 0)) * (1 - pivot.get("P_YRFI_Bot", 0))
+    pivot["P_NRFI_total"] = 1 - pivot["P_YRFI_total"]
+
+    pivot["matchup"] = pivot["away_name"] + " @ " + pivot["home_name"]
+
+    result = pivot[
+        [
+            "matchup",
+            "P_YRFI_Top",
+            "P_NRFI_Top",
+            "P_YRFI_Bot",
+            "P_NRFI_Bot",
+            "P_YRFI_total",
+            "P_NRFI_total",
+        ]
+    ].sort_values("P_YRFI_total", ascending=False)
 
     result.to_csv('predictions.txt', index=False, sep='\t', float_format='%.6f')
     print(result)
