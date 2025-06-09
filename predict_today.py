@@ -1,5 +1,6 @@
 import pandas as pd
 import numpy as np
+import json
 import requests
 import statsapi
 from pybaseball import playerid_lookup, playerid_reverse_lookup, pitching_stats
@@ -182,6 +183,10 @@ def fetch_games(date_str: str) -> pd.DataFrame:
 
 
 def build_features(df: pd.DataFrame, date_str: str):
+    with open("pitcher_encoding.json") as f:
+        enc = json.load(f)
+    mapping = {int(k): v for k, v in enc["mapping"].items()}
+    global_mean = enc["global_mean"]
     team_map = {
         'Arizona Diamondbacks': 'AZ', 'Atlanta Braves': 'ATL', 'Baltimore Orioles': 'BAL',
         'Boston Red Sox': 'BOS', 'Chicago Cubs': 'CHC', 'Chicago White Sox': 'CWS',
@@ -198,16 +203,17 @@ def build_features(df: pd.DataFrame, date_str: str):
     df['half_inning'] = df['inning_topbot'] + '_1st'
     df['pitcher'] = df['pitcher_name'].apply(get_pitcher_id)
     df = df.dropna(subset=['pitcher']).copy()
+    df['pitcher_te'] = df['pitcher'].map(mapping).fillna(global_mean)
     df['season'] = pd.to_datetime(date_str).year
     df['inning'] = 1
     df['is_home_team'] = (df['inning_topbot'] == 'Bot').astype(int)
 
     feature_cols = [
-        'inning','pitcher','season','hits_allowed','walks','strikeouts',
+        'inning','season','hits_allowed','walks','strikeouts',
         'batters_faced','runs_allowed','ERA_season','WHIP_season','FIP_season',
         'K/9_season','BB/9_season','xFIP_season','CSW%_season','xERA_season',
         'runs_rolling10_team','OBP_team','SLG_team','K_rate_team','BB_rate_team',
-        'is_home_team'
+        'is_home_team','pitcher_te'
     ]
 
     X = pd.DataFrame(index=df.index, columns=feature_cols, dtype=float)
@@ -219,7 +225,7 @@ def build_features(df: pd.DataFrame, date_str: str):
         feats = {**p_form, **p_season, **t_off}
 
         X.loc[idx, 'inning'] = row['inning']
-        X.loc[idx, 'pitcher'] = row['pitcher']
+        X.loc[idx, 'pitcher_te'] = row['pitcher_te']
         X.loc[idx, 'season'] = row['season']
         X.loc[idx, 'is_home_team'] = row['is_home_team']
         for col, val in feats.items():
@@ -236,7 +242,7 @@ def main():
         return
     games, X = build_features(games, today)
     model = xgb.Booster()
-    model.load_model('xgboost_yrfi_final.json')
+    model.load_model('xgboost_nrfi_model.json')
     dmat = xgb.DMatrix(X)
     games['P_YRFI'] = model.predict(dmat)
     games['P_NRFI'] = 1 - games['P_YRFI']

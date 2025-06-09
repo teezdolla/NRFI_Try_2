@@ -1,5 +1,6 @@
 import pandas as pd
 import numpy as np
+import json
 from sklearn.model_selection import TimeSeriesSplit
 from sklearn.metrics import (
     accuracy_score,
@@ -117,6 +118,14 @@ def add_team_offense(df: pd.DataFrame, window: int = 10, short_window: int = 7) 
 def merge_ballpark_factors(df: pd.DataFrame, park_factors: pd.DataFrame) -> pd.DataFrame:
     """Merge ballpark factors."""
     return df.merge(park_factors, on="park_id", how="left")
+
+
+def target_encode_pitcher(df: pd.DataFrame, target_col: str = "label"):
+    """Add a target-encoded pitcher column and return the mapping and global mean."""
+    global_mean = df[target_col].mean()
+    mapping = df.groupby("pitcher")[target_col].mean().to_dict()
+    df["pitcher_te"] = df["pitcher"].map(mapping).fillna(global_mean)
+    return df, mapping, global_mean
 
 
 def time_series_cv(
@@ -264,9 +273,14 @@ def main():
     df = load_data("final_training_data_clean_final.csv")
     df = add_pitcher_form(df)
     df = add_team_offense(df)
+    df, mapping, global_mean = target_encode_pitcher(df)
+    with open("pitcher_encoding.json", "w") as f:
+        json.dump({"mapping": mapping, "global_mean": global_mean}, f)
 
     feature_cols = [
-        col for col in df.columns if col not in {"label", "game_date"}
+        col
+        for col in df.columns
+        if col not in {"label", "game_date", "pitcher"}
     ]
     X = df[feature_cols].fillna(0)
     y = df["label"]
