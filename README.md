@@ -16,3 +16,12 @@ Run:
 ```bash
 python nrfi_pipeline.py
 ```
+
+### Daily Predictions
+`predict_today.py` fetches today's MLB schedule and outputs full first-inning YRFI/NRFI probabilities for each game.
+
+Run:
+
+```bash
+python predict_today.py
+```
