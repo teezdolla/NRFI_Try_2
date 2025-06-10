@@ -1,0 +1,16 @@
+Loading data...
+Cleaning data...
+Training Logistic Regression...
+Training Random Forest...
+Training XGBoost...
+Best model by ROC AUC: LogReg
+Saved predictions to predictions.csv
+Saved feature importance to importance.txt
+Saved ROC curve to roc_curve.txt
+
+Performance Metrics:
+LogReg {'accuracy': 0.6708860759493671, 'precision': 0.6967509025270758, 'recall': 0.7658730158730159, 'f1': 0.7296786389413988, 'roc_auc': 0.7333224614046532}
+RandomForest {'accuracy': 0.6616800920598389, 'precision': 0.6785714285714286, 'recall': 0.7916666666666666, 'f1': 0.7307692307692307, 'roc_auc': 0.6929604261796043}
+XGBoost {'accuracy': 0.6467203682393556, 'precision': 0.6743362831858407, 'recall': 0.7559523809523809, 'f1': 0.7128157156220767, 'roc_auc': 0.6925092411393781}
+
+Best model: XGBoost
